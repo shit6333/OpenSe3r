@@ -66,7 +66,7 @@ class AMB3R(nn.Module):
         self.front_end.model.semantic_head = PatchConditionedDPTHead(
             output_channels=sem_dim,
             semantic_dim=clip_dim,       # 512 for LSeg/CLIP features conditioning
-            semantic_proj_dim=256,
+            semantic_proj_dim=128,
             dim_in=2 * 1024,             # VGGT token dim (768)
             feature_only=True,
             input_identity=True, 
@@ -76,7 +76,7 @@ class AMB3R(nn.Module):
         self.front_end.model.instance_head = PatchConditionedDPTHead(
             output_channels=ins_dim,
             semantic_dim=clip_dim,  # will not be used, but we keep the same architecture for simplicity
-            semantic_proj_dim=256,
+            semantic_proj_dim=128,
             dim_in=2 * 1024,             # VGGT token dim (768)
             feature_only=True,
             input_identity=True,

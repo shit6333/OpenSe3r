@@ -168,8 +168,9 @@ class FrontEnd(nn.Module):
             predictions["depth_metric"] = depth * metric_scale_median.view(Bs, 1, 1, 1, 1)
 
         Bs, nimgs, H, W, one_ = depth.shape
-        predictions["enc"] = patch_tokens.view(Bs, nimgs, patch_tokens.shape[-2], patch_tokens.shape[-1])
-        predictions["dec"] = aggregated_tokens_list[-1].view(Bs, nimgs, aggregated_tokens_list[-1].shape[-2], aggregated_tokens_list[-1].shape[-1])[..., ps_idx:, :]
+        if not has_backend:  # only save feat at first process
+            predictions["enc"] = patch_tokens.view(Bs, nimgs, patch_tokens.shape[-2], patch_tokens.shape[-1])
+            predictions["dec"] = aggregated_tokens_list[-1].view(Bs, nimgs, aggregated_tokens_list[-1].shape[-2], aggregated_tokens_list[-1].shape[-1])[..., ps_idx:, :]
 
         extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
         point_map_by_unprojection = unproject_depth_map_to_point_map_torch(predictions["depth"].view(-1, H, W, 1), 
@@ -184,10 +185,11 @@ class FrontEnd(nn.Module):
 
 
         predictions['model'] = 'vggt'
-        predictions['aggregated_tokens_list'] = aggregated_tokens_list
+        if not has_backend: # only save feat at first process
+            predictions['aggregated_tokens_list'] = aggregated_tokens_list
+            predictions['cls_token'] = cls_token
+            predictions['reg_token'] = reg_token
         predictions['patch_start_idx'] = ps_idx
-        predictions['cls_token'] = cls_token
-        predictions['reg_token'] = reg_token
 
         # Process semantic and instance features if available and if the backend is present
         if has_backend:

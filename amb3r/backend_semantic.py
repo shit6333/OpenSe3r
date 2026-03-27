@@ -31,12 +31,17 @@ class BackEnd(nn.Module):
             nn.GELU()
         )
 
-        self.point_transformer = PointTransformerV3()
+        # self.point_transformer = PointTransformerV3()
         # self.point_transformer = PointTransformerV3(in_channels=1024,
         #                                             enc_depths=(2, 2, 2, 4, 2),
         #                                             enc_channels=(128, 128, 128, 256, 512),
         #                                             dec_depths=(1, 1, 2, 2),
         #                                             dec_channels=(512, 256, 128, 256))
+        self.point_transformer = PointTransformerV3(in_channels=1024,
+                                                    enc_depths=(1, 2, 2, 3, 1),
+                                                    enc_channels=(96, 96, 128, 192, 512),
+                                                    dec_depths=(1, 1, 1, 2),
+                                                    dec_channels=(512, 192, 128, 192))
         # self.point_transformer = PointTransformerV3.from_pretrained("/mnt/HDD4/ricky/feedforward/amb3r/checkpoints/concerto_small.pth").cuda()
         # self.point_transformer = load_ptv3("/mnt/HDD4/ricky/feedforward/amb3r/checkpoints/concerto_small.pth").cuda()
         self.k_neighbors = k_neighbors
