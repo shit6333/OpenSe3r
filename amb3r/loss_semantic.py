@@ -10,6 +10,11 @@ from vggt.utils.pose_enc import extri_intri_to_pose_encoding
 from vggt.train_utils.general import check_and_fix_inf_nan
 from math import ceil, floor
 from .tools.contrastive_loss import ContrastiveLoss
+from .feature_consistency_loss import (
+    FeatureConsistencyLoss,
+    compute_semantic_consistency_loss,
+    compute_instance_consistency_loss,
+)
 
 @torch.no_grad()
 def get_depth_loss(depth0, gt_depth, valid_mask, reduction='median', gt_scale=False):
@@ -132,8 +137,8 @@ def compute_semantic_loss(predictions, batch, weight=1.0):
     loss = cos_loss * conf - 0.2 * torch.log(conf + 1e-8)
     
     return {
-        # "loss_semantic": weight * cos_loss.mean(),
-        "loss_semantic": weight * loss.mean(),
+        "loss_semantic": weight * cos_loss.mean(),
+        # "loss_semantic": weight * loss.mean(),
         "loss_semantic_cos": cos_loss.mean().detach(),
     }
 
@@ -195,8 +200,8 @@ class MultitaskLoss(torch.nn.Module):
                  camera={"weight": 5.0, "loss_type": "l1"}, 
                  depth={"weight": 1.0, "gradient_loss_fn": "grad", "valid_range": 0.98, "gamma": 1., "alpha": 0.2},
                  point={"weight": 1.0, "gradient_loss_fn": "normal", "valid_range": 0.98, "gamma": 1., "alpha": 0.2},
-                 semantic={"weight": 1.0},
-                 instance={"weight": 0.5},
+                 semantic={"weight": 1.0, "consistency_weight": 0.2},
+                 instance={"weight": 1.0, "consistency_weight": 0.2},
                  track={}, 
                  enable_log_scale=False,
                  **kwargs):
@@ -211,6 +216,13 @@ class MultitaskLoss(torch.nn.Module):
         
         self.contrastive_loss_fn = ContrastiveLoss(
             inter_mode="hinge", inter_margin=0.2, normalize_feats=True
+        )
+        self.consistency_loss_fn = FeatureConsistencyLoss(
+            voxel_size=0.05,
+            min_views=2,
+            min_group_size=2,
+            detach_prototype=True,
+            normalize_feats=True,
         )
 
     def forward(self, predictions, batch, alpha=None, depth_conf=None, point_conf=None) -> torch.Tensor:
@@ -271,11 +283,22 @@ class MultitaskLoss(torch.nn.Module):
             total_loss = total_loss + sem_dict["loss_semantic"]
             loss_dict.update(sem_dict)
             
-            sem_dict = compute_semantic_contrastive_loss(predictions, batch,
-                                                         weight=self.instance["weight"],
-                                                         contrastive_loss_fn=self.contrastive_loss_fn)
-            total_loss = total_loss + sem_dict["loss_semantic_intra"]
-            loss_dict.update(sem_dict)
+            # sem_dict = compute_semantic_contrastive_loss(predictions, batch,
+            #                                              weight=self.instance["weight"],
+            #                                              contrastive_loss_fn=self.contrastive_loss_fn)
+            # total_loss = total_loss + sem_dict["loss_semantic_intra"]
+            sem_cons_dict = compute_semantic_consistency_loss(
+                predictions,
+                batch,
+                consistency_loss_fn=self.consistency_loss_fn,
+                weight=self.semantic.get("consistency_weight", 0.1),
+                feat_key="semantic_feat_expanded",
+                conf_key="semantic_conf",
+                points_key="pts3d",
+                valid_mask_key="valid_mask",
+            )
+            total_loss += sem_cons_dict["loss_semantic_consistency"]
+            loss_dict.update(sem_cons_dict)
             
 
         if "instance_feat" in predictions and "instance_mask" in batch:
@@ -284,6 +307,19 @@ class MultitaskLoss(torch.nn.Module):
                                             contrastive_loss_fn=self.contrastive_loss_fn)
             total_loss = total_loss + ins_dict["loss_instance"]
             loss_dict.update(ins_dict)
+            
+            ins_cons_dict = compute_instance_consistency_loss(
+                predictions,
+                batch,
+                consistency_loss_fn=self.consistency_loss_fn,
+                weight=self.instance.get("consistency_weight", 0.1),
+                feat_key="instance_feat",
+                conf_key="instance_conf",
+                points_key="pts3d",
+                valid_mask_key="valid_mask",
+            )
+            total_loss += ins_cons_dict["loss_instance_consistency"]
+            loss_dict.update(ins_cons_dict)
         
         loss_dict["objective"] = total_loss
 

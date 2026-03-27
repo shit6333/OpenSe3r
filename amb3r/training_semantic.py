@@ -381,8 +381,13 @@ def test_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     metric_logger.update(loss_semantic=float(loss_all[iter]["loss_semantic"].item()))
                 if "loss_semantic_intra" in loss_all[iter]:
                     metric_logger.update(loss_semantic_intra=float(loss_all[iter]["loss_semantic_intra"].item()))
+                if "loss_semantic_consistency" in loss_all[iter]:
+                    metric_logger.update(loss_semantic_consistency=float(loss_all[iter]["loss_semantic_consistency"].item()))
+                
                 if "loss_instance" in loss_all[iter]:
                     metric_logger.update(loss_instance=float(loss_all[iter]["loss_instance"].item()))
+                if "loss_instance_consistency" in loss_all[iter]:
+                    metric_logger.update(loss_instance_consistency=float(loss_all[iter]["loss_instance_consistency"].item()))
 
                 loss_all_depth0 += loss_depth0.item()
                 loss_all_depth1 += loss_depth1.item()
@@ -561,8 +566,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     metric_logger.update(loss_semantic=float(loss_all[iter]["loss_semantic"].item()))
                 if "loss_semantic_intra" in loss_all[iter]:
                     metric_logger.update(loss_semantic_intra=float(loss_all[iter]["loss_semantic_intra"].item()))
+                if "loss_semantic_consistency" in loss_all[iter]:
+                    metric_logger.update(loss_semantic_consistency=float(loss_all[iter]["loss_semantic_consistency"].item()))
                 if "loss_instance" in loss_all[iter]:
                     metric_logger.update(loss_instance=float(loss_all[iter]["loss_instance"].item()))
+                if "loss_instance_consistency" in loss_all[iter]:
+                    metric_logger.update(loss_instance_consistency=float(loss_all[iter]["loss_instance_consistency"].item()))
                 if log_writer is None:
                     continue
 
