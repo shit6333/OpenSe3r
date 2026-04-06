@@ -12,10 +12,9 @@ from math import ceil, floor
 from .tools.contrastive_loss import ContrastiveLoss
 from .feature_consistency_loss import (
     FeatureConsistencyLoss,
-    ObjectConsistencyLoss,
-    compute_object_consistency_loss
+    compute_semantic_consistency_loss,
+    compute_instance_consistency_loss,
 )
-from typing import Dict
 
 @torch.no_grad()
 def get_depth_loss(depth0, gt_depth, valid_mask, reduction='median', gt_scale=False):
@@ -88,67 +87,59 @@ def get_point_loss(pts0, gt_pts, valid_mask, reduction='median'):
 
 
 def compute_semantic_loss(predictions, batch, weight=1.0):
-    expanded = predictions["semantic_feat_expanded"].float()   # (B, T, C_clip, Hp, Wp)
-    sem_conf = predictions["semantic_conf"].float()            # (B, T, 1, Hp, Wp)
-    clip_gt = predictions.get("_clip_feat_gt", batch.get("clip_feat")).float()
-    inst_mask = batch["instance_mask"].long()                  # (B, T, H, W)
+    sem_feat = predictions["semantic_feat"]       # (B, T, C_sem, H', W')
+    expanded = predictions["semantic_feat_expanded"]   # (B, T, C_clip, H', W')
+    sem_conf = predictions["semantic_conf"]       # (B, T, 1, H', W')
+    
+    # clip_feat GT — 看你從哪邊拿（batch 或 predictions）
+    clip_gt = predictions.get("_clip_feat_gt", batch.get("clip_feat"))
 
+    # print(f'sem_feat: {sem_feat.shape}, {sem_feat.requires_grad}, {sem_feat.grad_fn}')
+    # print(f'expanded: {expanded.shape}, {expanded.requires_grad}, {expanded.grad_fn}')
+    # print(f'sem_conf: {sem_conf.shape}, {sem_conf.requires_grad}, {sem_conf.grad_fn}')
+    # print(f'clip_gt: {clip_gt.shape}, {clip_gt.requires_grad}, {clip_gt.grad_fn}')
+
+    # print("sem_feat mean/std:", sem_feat.mean().item(), sem_feat.std().item())
+    # print("expanded mean/std:", expanded.mean().item(), expanded.std().item())
+    # print("clip_gt mean/std:", clip_gt.mean().item(), clip_gt.std().item())
+
+    # print(f'sem_feat: ', sem_feat[0][0])
+    # print(f'expanded: ', expanded[0][0])
+    # print(f'clip_gt: ', clip_gt[0][0])
+
+    # print('=='*20)
+    _, _, C_sem, _, _ = sem_feat.shape
     B, T, C_clip, Hp, Wp = expanded.shape
-
+    C_clip = clip_gt.shape[2]
+    sem_feat = sem_feat.float()
+    sem_conf = sem_conf.float()
+    clip_gt = clip_gt.float()
+    expanded = expanded.float()
+    
+    # Resize GT 到 prediction 的解析度
     clip_gt_resized = F.interpolate(
-        clip_gt.reshape(B * T, C_clip, clip_gt.shape[3], clip_gt.shape[4]),
-        size=(Hp, Wp),
-        mode="bilinear",
-        align_corners=False,
-    ).reshape(B, T, C_clip, Hp, Wp)
-
-    inst_mask_resized = F.interpolate(
-        inst_mask.reshape(B * T, 1, inst_mask.shape[2], inst_mask.shape[3]).float(),
-        size=(Hp, Wp),
-        mode="nearest",
-    ).reshape(B, T, Hp, Wp).long()
-
-    pred = F.normalize(expanded, dim=2)
-    gt = F.normalize(clip_gt_resized, dim=2)
-    conf = sem_conf.reshape(B, T, Hp, Wp)
-
-    total_loss = pred.new_tensor(0.0)
-    total_count = 0
-
-    for b in range(B):
-        for t in range(T):
-            pred_bt = pred[b, t].permute(1, 2, 0).reshape(-1, C_clip)   # [Hp*Wp, C]
-            gt_bt = gt[b, t].permute(1, 2, 0).reshape(-1, C_clip)       # [Hp*Wp, C]
-            mask_bt = inst_mask_resized[b, t].reshape(-1)
-            conf_bt = conf[b, t].reshape(-1)
-
-            valid_ids = torch.unique(mask_bt)
-            valid_ids = valid_ids[valid_ids > 0]
-
-            for iid in valid_ids.tolist():
-                idx = (mask_bt == iid).nonzero(as_tuple=False).squeeze(1)
-                if idx.numel() < 2:
-                    continue
-
-                gt_proto = gt_bt[idx].mean(dim=0)
-                gt_proto = F.normalize(gt_proto, dim=0)
-                gt_proto = gt_proto.detach()
-
-                cos_sim = (pred_bt[idx] * gt_proto.unsqueeze(0)).sum(dim=1)
-                cos_loss = 1.0 - cos_sim
-
-                # 保留你原本 confidence weighting 的精神
-                loss_i = cos_loss * conf_bt[idx] - 0.2 * torch.log(conf_bt[idx] + 1e-8)
-
-                total_loss = total_loss + loss_i.sum()
-                total_count += idx.numel()
-    if total_count == 0:
-        loss_sem = pred.new_tensor(0.0)
-    else:
-        loss_sem = total_loss / total_count
+        clip_gt.reshape(B*T, C_clip, clip_gt.shape[3], clip_gt.shape[4]),
+        size=(Hp, Wp), mode='bilinear', align_corners=False
+    )
+    
+    # Expand compact feat 到 clip 維度
+    # sem_flat = sem_feat.reshape(B*T, C_sem, Hp, Wp).permute(0, 2, 3, 1).reshape(-1, C_sem)
+    expanded = expanded.reshape(B*T, C_clip, Hp, Wp)
+    
+    # Cosine loss
+    expanded_norm = F.normalize(expanded, dim=1)
+    gt_norm = F.normalize(clip_gt_resized, dim=1)
+    cos_sim = (expanded_norm * gt_norm).sum(dim=1)  # (B*T, H', W')
+    cos_loss = 1.0 - cos_sim
+    
+    # Confidence weighting
+    conf = sem_conf.reshape(B*T, 1, Hp, Wp).squeeze(1)
+    loss = cos_loss * conf - 0.2 * torch.log(conf + 1e-8)
+    
     return {
-        "loss_semantic": weight * loss_sem,
-        "loss_semantic_cos": loss_sem.detach(),
+        "loss_semantic": weight * cos_loss.mean(),
+        # "loss_semantic": weight * loss.mean(),
+        "loss_semantic_cos": cos_loss.mean().detach(),
     }
 
 def compute_semantic_contrastive_loss(predictions, batch, weight=1.0, contrastive_loss_fn=None):
@@ -166,29 +157,28 @@ def compute_semantic_contrastive_loss(predictions, batch, weight=1.0, contrastiv
         "loss_semantic_intra_det": intra.detach(),
     }
 
-
 def compute_instance_loss(predictions, batch, weight=1.0, contrastive_loss_fn=None):
-    ins_feat = predictions["instance_feat"].float()   # (B, T, C_ins, Hp, Wp)
-    sam_masks = batch["instance_mask"].long()         # (B, T, H, W)
-
+    ins_feat = predictions["instance_feat"].float()    # (B, T, C_ins, H', W')
+    sam_masks = batch["instance_mask"]          # (B, T, H, W) long
+    
     B, T, C_ins, Hp, Wp = ins_feat.shape
-
+    
+    # Resize mask 用 nearest（離散 label 不能用 bilinear）
     masks_resized = F.interpolate(
-        sam_masks.reshape(B * T, 1, sam_masks.shape[2], sam_masks.shape[3]).float(),
-        size=(Hp, Wp),
-        mode="nearest",
-    ).reshape(B, T, Hp, Wp).long()
-
+        sam_masks.reshape(B*T, 1, sam_masks.shape[2], sam_masks.shape[3]).float(),
+        size=(Hp, Wp), mode='nearest'
+    ).long().squeeze(1)
+    
+    feat_flat = ins_feat.reshape(B*T, C_ins, Hp, Wp)
+    
     if contrastive_loss_fn is None:
         contrastive_loss_fn = ContrastiveLoss(
-            inter_mode="hinge",
-            inter_margin=0.2,
-            normalize_feats=True,
+            inter_mode="hinge", inter_margin=0.2, normalize_feats=True
         )
-
-    intra = contrastive_loss_fn.scene_intra_loss(ins_feat, masks_resized)
-    inter = contrastive_loss_fn.scene_inter_loss(ins_feat, masks_resized)
-
+    
+    intra = contrastive_loss_fn.intra_loss(feat_flat, masks_resized)
+    inter = contrastive_loss_fn.inter_loss(feat_flat, masks_resized)
+    
     return {
         "loss_instance": weight * (intra + inter),
         "loss_instance_intra": intra.detach(),
@@ -227,14 +217,8 @@ class MultitaskLoss(torch.nn.Module):
         self.contrastive_loss_fn = ContrastiveLoss(
             inter_mode="hinge", inter_margin=0.2, normalize_feats=True
         )
-        # self.consistency_loss_fn = FeatureConsistencyLoss(
-        #     voxel_size=0.05,
-        #     min_views=2,
-        #     min_group_size=2,
-        #     detach_prototype=True,
-        #     normalize_feats=True,
-        # )
-        self.object_consistency_loss_fn = ObjectConsistencyLoss(
+        self.consistency_loss_fn = FeatureConsistencyLoss(
+            voxel_size=0.05,
             min_views=2,
             min_group_size=2,
             detach_prototype=True,
@@ -294,26 +278,29 @@ class MultitaskLoss(torch.nn.Module):
             raise NotImplementedError("Track loss is not cleaned up yet")
         
         if "semantic_feat_expanded" in predictions:
-            sem_dict = compute_semantic_loss(predictions, batch, weight=self.semantic["weight"])
+            sem_dict = compute_semantic_loss(predictions, batch,
+                                            weight=self.semantic["weight"])
             total_loss = total_loss + sem_dict["loss_semantic"]
             loss_dict.update(sem_dict)
             
-            sem_cons_dict = compute_object_consistency_loss(
+            # sem_dict = compute_semantic_contrastive_loss(predictions, batch,
+            #                                              weight=self.instance["weight"],
+            #                                              contrastive_loss_fn=self.contrastive_loss_fn)
+            # total_loss = total_loss + sem_dict["loss_semantic_intra"]
+            sem_cons_dict = compute_semantic_consistency_loss(
                 predictions,
                 batch,
-                consistency_loss_fn=self.object_consistency_loss_fn,
+                consistency_loss_fn=self.consistency_loss_fn,
                 weight=self.semantic.get("consistency_weight", 0.1),
                 feat_key="semantic_feat_expanded",
                 conf_key="semantic_conf",
-                mask_key="instance_mask",
+                points_key="pts3d",
                 valid_mask_key="valid_mask",
-                loss_name="loss_semantic_consistency",
-                stat_prefix="sem_cons",
             )
             total_loss += sem_cons_dict["loss_semantic_consistency"]
             loss_dict.update(sem_cons_dict)
             
-            
+
         if "instance_feat" in predictions and "instance_mask" in batch:
             ins_dict = compute_instance_loss(predictions, batch, 
                                             weight=self.instance["weight"],
@@ -321,17 +308,15 @@ class MultitaskLoss(torch.nn.Module):
             total_loss = total_loss + ins_dict["loss_instance"]
             loss_dict.update(ins_dict)
             
-            ins_cons_dict = compute_object_consistency_loss(
+            ins_cons_dict = compute_instance_consistency_loss(
                 predictions,
                 batch,
-                consistency_loss_fn=self.object_consistency_loss_fn,
+                consistency_loss_fn=self.consistency_loss_fn,
                 weight=self.instance.get("consistency_weight", 0.1),
                 feat_key="instance_feat",
                 conf_key="instance_conf",
-                mask_key="instance_mask",
+                points_key="pts3d",
                 valid_mask_key="valid_mask",
-                loss_name="loss_instance_consistency",
-                stat_prefix="ins_cons",
             )
             total_loss += ins_cons_dict["loss_instance_consistency"]
             loss_dict.update(ins_cons_dict)

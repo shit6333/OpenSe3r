@@ -53,8 +53,8 @@ def get_resolution_by_gpu():
         num_frames_test = 10
         res_str = "[(518, 392), (518, 336), (518, 294), (518, 266), (518, 210), (518, 154)]"
         test_res_str = "(518, 392)"
-        trainset = f"2000 @ Scannet(split='train', ROOT='/mnt/HDD4/ricky/data/', resolution={res_str}, num_seq=1, num_frames={num_frames})"
-        testset = f"Scannet(split='test', ROOT='/mnt/HDD4/ricky/data/', resolution={test_res_str}, num_seq=1, num_frames={num_frames_test})"
+        # trainset = f"2000 @ Scannet(split='train', ROOT='/mnt/HDD4/ricky/data/', resolution={res_str}, num_seq=1, num_frames={num_frames})"
+        # testset = f"Scannet(split='test', ROOT='/mnt/HDD4/ricky/data/', resolution={test_res_str}, num_seq=1, num_frames={num_frames_test})"
 
         batch_test = 1
         
@@ -74,9 +74,11 @@ def get_resolution_by_gpu():
         # test_res_str = "(518, 392)"
         batch_test = 1
         
-        trainset = f"2000 @ Scannet(split='train', ROOT='/mnt/HDD4/ricky/data/', resolution={res_str}, num_seq=1, num_frames={num_frames})"
-        testset = f"Scannet(split='test', ROOT='/mnt/HDD4/ricky/data/', resolution={test_res_str}, num_seq=1, num_frames={num_frames_test})"
+        # trainset = f"2000 @ Scannet(split='train', ROOT='/mnt/HDD4/ricky/data/', resolution={res_str}, num_seq=1, num_frames={num_frames})"
+        # testset = f"Scannet(split='test', ROOT='/mnt/HDD4/ricky/data/', resolution={test_res_str}, num_seq=1, num_frames={num_frames_test})"
         
+        trainset = f"2000 @ Scannetpp(split='train', ROOT='/mnt/HDD4/ricky/data/data/InsScene-15K/processed_scannetpp_v2/data', resolution={res_str}, num_seq=1, num_frames={num_frames})"
+        testset = f"Scannetpp(split='val', ROOT='/mnt/HDD4/ricky/data/data/InsScene-15K/processed_scannetpp_v2/data', resolution={test_res_str}, num_seq=1, num_frames={num_frames_test})"
 
         return res_str, num_frames, trainset, testset, batch_test
 
@@ -616,6 +618,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
         del loss, pred, batch
+        del pred_all
+        del loss_all
+        del views
+        del views_all
+        torch.cuda.empty_cache()
 
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(epoch=epoch_f)
@@ -668,7 +675,7 @@ def train(args):
     print('Building train dataset {:s}'.format(args.train_dataset))
     #  dataset and loader
     data_loader_train = build_dataset(args.train_dataset, args.batch_size, args.num_workers, test=False)
-
+    print('Building test dataset(s) {:s}'.format(args.test_dataset))
     data_loader_test = {dataset.split('(')[0]: build_dataset(dataset, args.batch_size_test, args.num_workers_test, test=True)
                         for dataset in args.test_dataset.split('+')}
     
@@ -751,7 +758,7 @@ def train(args):
         print(name)
     
     # loss_scaler = NativeScaler()
-    loss_scaler = NativeScaler() if args.amp == "fp16" else None
+    loss_scaler = NativeScaler() # if args.amp == "fp16" else None
 
     def write_log_stats(epoch, train_stats, test_stats):
         if misc.is_main_process():

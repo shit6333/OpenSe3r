@@ -7,8 +7,8 @@ import torch.nn.functional as F
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'thirdparty'))
 
 
-# from vggt.models.vggt import VGGT
-from .vggt_w_lora import VGGT
+from vggt.models.vggt import VGGT
+# from .vggt_w_lora import VGGT
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.geometry import unproject_depth_map_to_point_map_torch, closed_form_inverse_se3
 
@@ -19,20 +19,20 @@ class FrontEnd(nn.Module):
     def __init__(self, ckpt_path='./checkpoints/VGGT.pt', metric_scale=True, clip_dim=512, sem_dim=64):
         super().__init__()
         self.metric_scale=metric_scale
-        # self.model = VGGT(return_depth_feat=metric_scale)
-        self.model = VGGT(
-            return_depth_feat=metric_scale,
-            use_lora=True,
-            lora_r=4,
-            lora_alpha=16,
-            lora_dropout=0.05,
-            lora_last_n=4,
-            lora_on_qkv=True,
-            lora_on_proj=True,
-            lora_on_mlp=False,
-            lora_on_frame_blocks=True,
-            lora_on_global_blocks=True,
-        )
+        self.model = VGGT(return_depth_feat=metric_scale)
+        # self.model = VGGT(
+        #     return_depth_feat=metric_scale,
+        #     use_lora=True,
+        #     lora_r=4,
+        #     lora_alpha=16,
+        #     lora_dropout=0.05,
+        #     lora_last_n=4,
+        #     lora_on_qkv=True,
+        #     lora_on_proj=True,
+        #     lora_on_mlp=False,
+        #     lora_on_frame_blocks=True,
+        #     lora_on_global_blocks=True,
+        # )
 
         if os.path.isfile(ckpt_path):
             checkpoint = torch.load(ckpt_path)

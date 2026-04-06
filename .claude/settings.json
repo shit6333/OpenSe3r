@@ -1,0 +1,15 @@
+{
+  "defaultMode": "plan",
+  "model": "claude-sonnet-4-6",
+  "permissions": {
+    "deny": ["Write", "Edit", "MultiEdit", "Bash(rm:*)", "Bash(mv:*)"],
+    "allow": [
+      "Write(.claude/CODEBASE.md)",
+      "Edit(.claude/CODEBASE.md)",
+      "Write(.claude/sandbox/**)",
+      "Edit(.claude/sandbox/**)",
+      "MultiEdit(.claude/sandbox/**)",
+      "Edit(CLAUDE.md)"
+    ]
+  }
+}
