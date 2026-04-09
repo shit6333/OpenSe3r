@@ -3,14 +3,14 @@
 device: 'cuda:0'
 
 # Mapping
-map_init_window: 6 # 4, 20
-map_every: 4 # 2, 8 (curr map frame)
+map_init_window: 4 # 20
+map_every: 2 # 8 (curr map frame)
 
 weighted_average_alignment: true
 
-max_keyframes: 4 # 2, 10
-min_keyframes: 2 # 1, 7
-top_k_keyframes: 2 # 4
+max_keyframes: 2 # 10
+min_keyframes: 1 # 7
+top_k_keyframes: 1 # 4
 bridge_keyframes: 0 # 1
 
 keyframe_threshold: 0.15

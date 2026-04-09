@@ -70,7 +70,8 @@ class PatchConditionedDPTHead(VGGTDPTHead):
             nn.Conv2d(features_dim, 64, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(64, 1, kernel_size=1),
-            nn.Softplus()   # -> (0, +inf)
+            # nn.Softplus()   # -> (0, +inf)
+            nn.Sigmoid()   # -> (0, +inf)
         )
 
     def forward(

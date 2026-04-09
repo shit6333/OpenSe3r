@@ -399,6 +399,17 @@ def save_csv(path, results, n_valid, n_total,
     print(f"CSV saved: {path}")
 
 
+def remap_equivalent_classes(labels: np.ndarray, merge_table_desk: bool = False) -> np.ndarray:
+    """
+    Optionally merge semantically equivalent classes for relaxed evaluation.
+    Current setting:
+      - table (7) and desk (13) -> table (7)
+    """
+    labels = labels.copy()
+    if merge_table_desk:
+        labels[labels == 13] = 7
+    return labels
+
 # ── Argument parser ───────────────────────────────────────────────────────────
 
 def get_args():
@@ -429,6 +440,8 @@ def get_args():
     p.add_argument("--ignore_ids",    type=int,   nargs="+", default=[0])
     p.add_argument("--save_csv",      default=None,
                    help="Save per-class + summary results to CSV")
+    p.add_argument("--merge_table_desk", action="store_true",
+               help="Treat table(7) and desk(13) as the same class during evaluation")
     return p.parse_args()
 
 
@@ -524,13 +537,15 @@ def main():
     # Save coloured PCDs for visual inspection (same colormap for both)
     colormap = build_scannet20_colormap()
 
-    gt_vis_path = os.path.join(args.results_path,
-                               f"scene_{args.scene_name}_gt_colored.ply")
-    save_colored_pcd(gt_vis_path, gt_xyz, gt_labels, colormap)
+    if not args.merge_table_desk:
+        gt_vis_path = os.path.join(args.results_path,
+                                f"scene_{args.scene_name}_gt_colored.ply")
+        save_colored_pcd(gt_vis_path, gt_xyz, gt_labels, colormap)
 
-    pred_vis_path = os.path.join(args.results_path,
-                                 f"scene_{args.scene_name}_pred_colored_metric.ply")
-    save_colored_pcd(pred_vis_path, pred_xyz_metric, pred_labels, colormap)
+    if not args.merge_table_desk:
+        pred_vis_path = os.path.join(args.results_path,
+                                    f"scene_{args.scene_name}_pred_colored_metric.ply")
+        save_colored_pcd(pred_vis_path, pred_xyz_metric, pred_labels, colormap)
 
     # KD-Tree matching
     print(f"\n  KD-Tree matching (k={args.k}, max_dist={args.max_dist})...")
@@ -539,8 +554,19 @@ def main():
         k=args.k, max_dist=args.max_dist,
     )
 
+    # Table-desk merging if requested
+    if args.merge_table_desk:
+        print("  [Eval alias] Merging desk(13) -> table(7)")
+        gt_labels_eval = remap_equivalent_classes(gt_labels, merge_table_desk=True)
+        matched_pred_eval = remap_equivalent_classes(matched_pred, merge_table_desk=True)
+    else:
+        gt_labels_eval = gt_labels
+        matched_pred_eval = matched_pred
+
+    
+    # Build confusion matrix and compute metrics
     conf, n_valid = build_confmat(
-        gt_labels, matched_pred,
+        gt_labels_eval, matched_pred_eval,
         num_classes=args.num_classes,
         ignore_ids=args.ignore_ids,
     )

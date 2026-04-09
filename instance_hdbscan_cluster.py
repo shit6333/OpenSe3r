@@ -76,6 +76,52 @@ def save_ply(path: str, points: np.ndarray, colors: np.ndarray):
                 r, g, b = rgb255[i]
                 f.write(f"{x:.6f} {y:.6f} {z:.6f} {r} {g} {b}\n")
 
+def save_bbox_wireframes_ply(path: str, instances_info, line_samples: int = 50):
+    """
+    Save all instance bounding boxes as a point-cloud-style PLY by densely
+    sampling points along bbox edges.
+
+    This is more compatible with simple PLY viewers (e.g. VSCode point cloud viewers)
+    that do not support LineSet / line primitives.
+    """
+    pts_all = []
+    cols_all = []
+
+    edge_ids = [
+        (0, 1), (1, 2), (2, 3), (3, 0),
+        (4, 5), (5, 6), (6, 7), (7, 4),
+        (0, 4), (1, 5), (2, 6), (3, 7),
+    ]
+
+    for inst in instances_info:
+        bmin = np.array(inst["bbox_min"], dtype=np.float32)
+        bmax = np.array(inst["bbox_max"], dtype=np.float32)
+        color = np.array(inst["color_rgb"], dtype=np.float32)
+
+        corners = np.array([
+            [bmin[0], bmin[1], bmin[2]],
+            [bmax[0], bmin[1], bmin[2]],
+            [bmax[0], bmax[1], bmin[2]],
+            [bmin[0], bmax[1], bmin[2]],
+            [bmin[0], bmin[1], bmax[2]],
+            [bmax[0], bmin[1], bmax[2]],
+            [bmax[0], bmax[1], bmax[2]],
+            [bmin[0], bmax[1], bmax[2]],
+        ], dtype=np.float32)
+
+        for s, e in edge_ids:
+            p0, p1 = corners[s], corners[e]
+            t = np.linspace(0.0, 1.0, line_samples, dtype=np.float32)[:, None]
+            edge_pts = p0[None] * (1.0 - t) + p1[None] * t
+            pts_all.append(edge_pts)
+            cols_all.append(np.tile(color[None], (line_samples, 1)))
+
+    if len(pts_all) == 0:
+        return
+
+    pts_all = np.concatenate(pts_all, axis=0)
+    cols_all = np.concatenate(cols_all, axis=0)
+    save_ply(path, pts_all, cols_all)
 
 def load_per_point_geometry(results_npz: str,
                             conf_threshold: float = 0.0) -> np.ndarray:
@@ -117,7 +163,7 @@ def main():
                         help='Output directory')
     parser.add_argument('--conf_threshold', type=float, default=0.0,
                         help='Confidence threshold for per-point reconstruction (default: 0.0)')
-    parser.add_argument('--min_cluster_size', type=int, default=50)
+    parser.add_argument('--min_cluster_size', type=int, default=30)
     parser.add_argument('--min_samples',      type=int, default=None)
     parser.add_argument('--cluster_selection_epsilon', type=float, default=0.0)
     parser.add_argument('--use_pca',     type=int, default=None,
@@ -276,6 +322,11 @@ def main():
     vox_ply = os.path.join(args.output, "instance_hdbscan_voxels.ply")
     print(f"Saving voxel PLY      → {vox_ply}  ({V:,} voxels)")
     save_ply(vox_ply, voxel_centers, voxel_colors)
+
+    # BBox-only PLY (same coordinate system as instance ply)
+    bbox_ply = os.path.join(args.output, "instance_hdbscan_bboxes.ply")
+    print(f"Saving bbox PLY       → {bbox_ply}")
+    save_bbox_wireframes_ply(bbox_ply, instances_info)
 
     # ── JSON output ───────────────────────────────────────────────────────────
     noise_pts = int((point_labels == -1).sum())

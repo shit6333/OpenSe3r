@@ -207,3 +207,22 @@ class AMB3RStage1FullFT(nn.Module):
             state = state['model']
         self.load_state_dict(state, strict=strict)
         self.prepare(data_type)
+
+
+    @torch.inference_mode()
+    def run_amb3r_sem_vo(self, frames, cfg, keyframe_memory):
+        """
+        Stage-1 inference interface for semantic SLAM.
+        No backend → single forward pass; no blending.
+        """
+        predictions = self.forward(frames)[0]
+        return predictions
+
+    @torch.inference_mode()
+    def run_amb3r_sem_feat(self, frames, cfg=None):
+        """
+        Feature-only inference path for GT-depth semantic pipeline.
+        No VO post-processing, no blending, no keyframe-memory logic.
+        """
+        predictions = self.forward(frames)[0]
+        return predictions

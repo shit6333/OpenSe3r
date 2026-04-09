@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from torch.utils.data import DataLoader
 
 from amb3r.model_semantic import AMB3R
+# from amb3r.model_stage1_wo_lora import AMB3RStage1FullFT as AMB3R
 from amb3r.tools.pts_vis import get_pts_mask
 from amb3r.tools.semantic_vis_utils import (
     get_scannet_label_and_color_map,

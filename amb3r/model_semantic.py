@@ -702,6 +702,42 @@ class AMB3R(nn.Module):
  
         return res_all[-1]
     
+    @torch.inference_mode()
+    def run_amb3r_sem_feat(self, frames, cfg=None):
+        """
+        Feature-only semantic inference path.
+
+        Run:
+        1. frontend
+        2. LSeg extraction
+        3. backend
+        4. semantic / instance heads
+
+        Return only the backend result with semantic/instance features.
+        No blend, no pose selection, no keyframe-memory logic.
+        """
+        # Step 1: frontend
+        images, patch_tokens = self.front_end.encode_patch_tokens(frames)
+        res0 = self.front_end.decode_patch_tokens_and_heads(
+            images, patch_tokens, has_backend=False
+        )
+
+        # Step 2: dense semantic prior
+        lseg_feat = self._extract_lseg_feat(images)
+
+        # Step 3: backend + semantic / instance heads
+        res1 = self.run_semantic_backend(
+            res0,
+            images,
+            patch_tokens=patch_tokens,
+            lseg_feat=lseg_feat,
+        )
+
+        # Optional: keep GT dense semantic prior for debugging / loss
+        res1['_clip_feat_gt'] = lseg_feat
+        if 'semantic_feat' in res1:
+            res1['semantic_feat_expanded'] = res1['semantic_feat']
+        return res1
     
     def run_amb3r_benchmark(self, frames):
         '''

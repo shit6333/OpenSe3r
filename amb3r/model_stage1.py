@@ -447,7 +447,7 @@ class AMB3RStage1(nn.Module):
         # 4+5. Decode through VGGT blocks + DPT heads
         predictions = self.front_end.decode_patch_tokens_and_heads(
             images, patch_tokens,
-            semantic_feats=None,  # PatchConditionedDPTHead conditioning
+            semantic_feats=lseg_feat,  # PatchConditionedDPTHead conditioning
             has_backend=True,          # activates semantic_head + instance_head
         )
 

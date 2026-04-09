@@ -17,6 +17,7 @@ from .imc import Imc
 from .scannet import Scannet
 from .scannetpp import Scannetpp
 from .scannetpp_arrow import Scannetpp_Arrow
+from .Infinigen_arrow import Infinigen_Arrow
 
 
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'thirdparty'))

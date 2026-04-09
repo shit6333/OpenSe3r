@@ -41,12 +41,19 @@ class AMB3R_VO():
         self.keyframe_memory.initialize(res)
 
     def mapping(self, views_all, cfg):
+        feedforward_time = time.time()
         res = self.local_mapping(views_all, cfg)
+        feedforward_time = time.time() - feedforward_time
+
+        memory_update_time = time.time()
         self.keyframe_memory.update(
             res,
             start_idx=views_all['start_idx'],
             end_idx=views_all['end_idx'],
         )
+        memory_update_time = time.time() - memory_update_time
+        
+        return feedforward_time, memory_update_time
 
     # ------------------------------------------------------------------
     def run(self, images, poses_gt=None):
@@ -74,6 +81,9 @@ class AMB3R_VO():
         has_instance = (
             self.model.front_end.model.instance_head is not None
         )
+
+        feedforward_time_acc = 0
+        memory_update_time_acc = 0
 
         self.keyframe_memory = SLAMemory(
             self.cfg, T, H, W,
@@ -118,7 +128,9 @@ class AMB3R_VO():
                     'end_idx':   idx,
                 }
 
-                self.mapping(views_to_map, self.cfg)
+                feedforward_time, memory_update_time = self.mapping(views_to_map, self.cfg)
+                feedforward_time_acc += feedforward_time
+                memory_update_time_acc += memory_update_time
                 last_mapped_idx = idx
 
             print(f"Processed frame {idx+1}/{T}, "
@@ -131,5 +143,8 @@ class AMB3R_VO():
                 )
             except Exception:
                 pass
+
+        print(f"Avg Time per frame — Feedforward: {feedforward_time_acc / T:.3f}s, FPS: {T / feedforward_time_acc:.1f}")
+        print(f"Avg Time per frame — Memory update: {memory_update_time_acc / T:.3f}s, FPS: {T / memory_update_time_acc:.1f}")
 
         return self.keyframe_memory
