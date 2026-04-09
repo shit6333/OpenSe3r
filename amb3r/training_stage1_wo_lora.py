@@ -628,7 +628,10 @@ def train(args):
 
     if args.pretrained and not args.resume:
         print('Loading Stage-1 pretrained:', args.pretrained)
-        ckpt = torch.load(args.pretrained, map_location=device)
+        try:
+            ckpt = torch.load(args.pretrained, map_location=device)
+        except:
+            ckpt = torch.load(args.pretrained, map_location=device, weights_only=False)
         model.load_state_dict(ckpt.get('model', ckpt), strict=False)
 
     if args.amp == 'fp16':
