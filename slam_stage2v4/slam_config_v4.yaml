@@ -1,0 +1,37 @@
+# ── Device ────────────────────────────────────────────────────────────────────
+device: 'cuda:0'
+
+# ── Mapping timing ────────────────────────────────────────────────────────────
+map_init_window: 6   # frames to accumulate before first map initialisation
+map_every: 4         # process a new batch every N frames
+
+# ── Keyframe management ───────────────────────────────────────────────────────
+max_keyframes: 4
+min_keyframes: 2
+top_k_keyframes: 2
+bridge_keyframes: 0
+
+keyframe_threshold: 0.15
+keyframe_resample_threshold: 0.4
+keyframe_resample_threshold_max_f: 1.2
+keyframe_resample_threshold_max_b: 1.2
+keyframe_resample_threshold_min: 0.1
+
+# ── Voxel sizes ───────────────────────────────────────────────────────────────
+# Model conditioning memory (voxel_store):
+#   Smaller → finer spatial resolution for memory queries, more RAM
+mem_voxel_size: 0.03
+
+# Final semantic / instance 3-D map (VoxelFeatureMap):
+semantic_voxel_size: 0.05
+# semantic_voxel_size: 0.03
+
+# ── Stage-2 V4 model memory ───────────────────────────────────────────────────
+# mem_mode controls what features are stored in voxel_store:
+#   1 → detached sem⊕ins features (528-dim)
+#   2 → detached full VGGT late features (2048-dim) [recommended]
+#   3 → frozen AE bottleneck features (requires stage1_5_ckpt)
+mem_mode: 3
+
+# ── Geometry alignment ────────────────────────────────────────────────────────
+pts_by_unprojection: false

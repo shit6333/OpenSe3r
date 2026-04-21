@@ -170,7 +170,6 @@ class AMB3RStage2V4(nn.Module):
         mem_voxel_size: float  = 0.05,
         feat_voxel_size: float = 0.01,
         ema_alpha: float   = 0.5,
-        store_ema_lambda: float = 0.0,
         use_checkpoint: bool = False,
         # Stage 1.5 autoencoder (for mem_mode=3)
         ae_encoder: nn.Module = None,
@@ -238,8 +237,7 @@ class AMB3RStage2V4(nn.Module):
         self.vggt_dim       = vggt_dim
         self.mem_voxel_size = mem_voxel_size
         self.feat_voxel_size = feat_voxel_size
-        self.ema_alpha         = ema_alpha
-        self.store_ema_lambda  = store_ema_lambda
+        self.ema_alpha      = ema_alpha
         self.use_checkpoint = use_checkpoint
 
         self._dpt_indices: Optional[Tuple[int, int]] = None
@@ -310,7 +308,6 @@ class AMB3RStage2V4(nn.Module):
             return DetachedVoxelStore(
                 voxel_size=self.mem_voxel_size,
                 mem_dim=self.effective_mem_dim,
-                ema_lambda=self.store_ema_lambda,
             )
 
     # Keep old name for backward compat
@@ -376,14 +373,14 @@ class AMB3RStage2V4(nn.Module):
             W_conf_flat = W_conf.reshape(B * T * N_patch, 1)
             return M_content, W_conf_flat
 
-        # Detached sem_feat ⊕ ins_feat at pixel resolution
+        # Detached sem_feat ⊕ ins_feat at patch resolution
         elif self.mem_mode == 1:
-            # Pixel-level sem ⊕ ins (no pooling — voxelize handles aggregation)
+            # Detached sem ⊕ ins at patch resolution
             sem_flat = sem_feat.flatten(0, 1)  # [B*T, C_sem, H, W]
-            ins_flat = ins_feat.flatten(0, 1)  # [B*T, C_ins, H, W]
-            sem_px = sem_flat.permute(0, 2, 3, 1).reshape(-1, sem_flat.shape[1])
-            ins_px = ins_flat.permute(0, 2, 3, 1).reshape(-1, ins_flat.shape[1])
-            M_content = torch.cat([sem_px, ins_px], dim=-1).detach()
+            ins_flat = ins_feat.flatten(0, 1)
+            sem_p = F.adaptive_avg_pool2d(sem_flat, (Hp, Wp)).permute(0, 2, 3, 1).reshape(B * T * N_patch, -1)
+            ins_p = F.adaptive_avg_pool2d(ins_flat, (Hp, Wp)).permute(0, 2, 3, 1).reshape(B * T * N_patch, -1)
+            M_content = torch.cat([sem_p, ins_p], dim=-1).detach()
             return M_content, None
 
         # Use full late VGGT features (2048-dim) as memory
@@ -537,6 +534,7 @@ class AMB3RStage2V4(nn.Module):
             'semantic_feat':    sem_feat,
             'instance_feat':    ins_feat,
             'semantic_conf':    sem_conf,
+            'instance_conf':   ins_conf,
             'sem_feat_patch':   sem_feat_patch,
             'ins_feat_patch':   ins_feat_patch,
             '_clip_feat_gt':    lseg_feat,
@@ -549,21 +547,11 @@ class AMB3RStage2V4(nn.Module):
             'world_points':     res_geo['world_points'],
             'extrinsic':        res_geo['extrinsic'],
             'intrinsic':        res_geo['intrinsic'],
-            'world_points_conf': res_geo['world_points_conf'],
-            'pose':              res_geo['pose'],
-            'instance_conf':     ins_conf,
             'images':           images,
         }
         # Backward compat aliases
         predictions['M_readout'] = M_content
-
-        # Mode 1 stores pixel-level features → return pixel-level pts for update
-        if self.mem_mode == 1:
-            pts_for_update = query_pts.flatten(0, 1).reshape(-1, 3).float()
-        else:
-            pts_for_update = pts_flat
-
-        return predictions, M_content, W_conf, pts_for_update
+        return predictions, M_content, W_conf, pts_flat
 
     # ── VoxelMap update (static) ──────────────────────────────────────────────
 

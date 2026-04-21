@@ -56,7 +56,6 @@ from amb3r.loss_stage2v4 import (
     Stage2V4Loss,
     compute_cross_view_consistency_loss,
     compute_instance_id_cross_chunk_loss,
-    compute_instance_id_cross_chunk_push_loss,
 )
 from amb3r.memory_stage2v4 import CrossChunkFeatureBuffer
 
@@ -228,7 +227,6 @@ def get_args_parser():
 
     # ── sequence / chunk ──────────────────────────────────────────────────
     p.add_argument('--seq_len',    type=int, default=16)
-    p.add_argument('--seq_len_eval',    type=int, default=16)
     p.add_argument('--chunk_size', type=int, default=4)
     p.add_argument('--stride',     type=int, default=2)
 
@@ -264,14 +262,6 @@ def get_args_parser():
                    help='Weight for instance-ID cross-chunk semantic consistency loss')
     p.add_argument('--w_instid_cross_ins', type=float, default=2.0,
                    help='Weight for instance-ID cross-chunk instance consistency loss')
-    p.add_argument('--w_instid_push_ins',   type=float, default=2.0,
-                   help='Weight for cross-chunk inter-class push loss (instance)')
-    p.add_argument('--w_instid_push_sem',   type=float, default=0.5,
-                   help='Weight for cross-chunk inter-class push loss (semantic)')
-    p.add_argument('--instid_push_margin',  type=float, default=0.5,
-                   help='Hinge margin for push loss (cosine similarity threshold)')
-    p.add_argument('--instid_push_max_neg', type=int,   default=64,
-                   help='Max stored instance IDs sampled as negatives per step')
     p.add_argument('--use_geo_cross_consistency', action='store_true', default=False)
     p.add_argument('--use_instid_cross_consistency', action='store_true', default=True)
     p.add_argument('--cross_loss_n_samples', type=int, default=4096, 
@@ -423,42 +413,9 @@ def train_one_sequence(
                         )
                     chunk_loss = chunk_loss + instid_losses['instid_objective']
 
-        # ── Instance-ID push loss (cross-chunk inter-class repulsion) ─────────
-        push_losses: dict = {}
-        if args.use_instid_cross_consistency:
-            if c > 0 and (args.w_instid_push_ins > 0 or args.w_instid_push_sem > 0):
-                inst_mask_raw = chunk.get('instance_mask')
-                if inst_mask_raw is not None:
-                    inst_flat_push = inst_mask_raw.reshape(-1)
-                    sem_flat_push  = predictions['semantic_feat'].permute(0,1,3,4,2).reshape(-1, predictions['semantic_feat'].shape[2])
-                    ins_flat_push  = predictions['instance_feat'].permute(0,1,3,4,2).reshape(-1, predictions['instance_feat'].shape[2])
-                    if args.cross_loss_n_samples > 0:
-                        N_px = inst_flat_push.shape[0]
-                        if N_px > args.cross_loss_n_samples:
-                            idx = torch.randperm(N_px, device=device)[:args.cross_loss_n_samples]
-                            inst_flat_push = inst_flat_push[idx]
-                            sem_flat_push  = sem_flat_push[idx]
-                            ins_flat_push  = ins_flat_push[idx]
-                    with torch.autocast('cuda', dtype=dtype):
-                        push_losses = compute_instance_id_cross_chunk_push_loss(
-                            sem_curr=sem_flat_push,
-                            ins_curr=ins_flat_push,
-                            instance_mask_flat=inst_flat_push,
-                            feat_buffer=feat_buffer,
-                            margin=args.instid_push_margin,
-                            w_sem=args.w_instid_push_sem,
-                            w_ins=args.w_instid_push_ins,
-                            max_neg=args.instid_push_max_neg,
-                        )
-                    chunk_loss = chunk_loss + push_losses['instid_push_objective']
-
         if not torch.isfinite(chunk_loss):
             print(f'[Stage2V4] Non-finite loss at chunk {c}, skipping.')
-            if args.mem_mode == 1:
-                AMB3RStage2V4.update_voxel_store(
-                    voxel_map, M_content.detach(), None,
-                    pts_flat.detach(), mem_mode=1)
-            elif args.pixel_broadcast_mem:
+            if args.pixel_broadcast_mem:
                 _pixel_broadcast_update(
                     voxel_map,
                     M_content.detach(),
@@ -479,15 +436,10 @@ def train_one_sequence(
             ins_px = predictions['instance_feat'].detach().permute(0,1,3,4,2)
             sem_px = sem_px.reshape(-1, sem_px.shape[-1])
             ins_px = ins_px.reshape(-1, ins_px.shape[-1])
-            sem_conf_px = predictions['semantic_conf'].detach().permute(0,1,3,4,2).reshape(-1)
-            ins_conf_px = predictions['instance_conf'].detach().permute(0,1,3,4,2).reshape(-1)
-            feat_buffer.update(pts_px, sem_px, ins_px,
-                               sem_conf=sem_conf_px, ins_conf=ins_conf_px)
+            feat_buffer.update(pts_px, sem_px, ins_px)
             inst_skip = chunk.get('instance_mask')
             if inst_skip is not None:
-                feat_buffer.update_by_id(inst_skip.reshape(-1), ins_px, sem_px,
-                                         ins_conf_flat=ins_conf_px,
-                                         sem_conf_flat=sem_conf_px)
+                feat_buffer.update_by_id(inst_skip.reshape(-1), ins_px, sem_px)
             continue
 
         total_loss   = total_loss + chunk_loss
@@ -506,18 +458,9 @@ def train_one_sequence(
                 log_dict[k] += v.item()
         if 'instid_n_matched' in instid_losses:
             log_dict['instid_n_matched'] += instid_losses['instid_n_matched']
-        for k, v in push_losses.items():
-            if isinstance(v, torch.Tensor) and k.endswith('_det'):
-                log_dict[k] += v.item()
-        if 'instid_push_n_pairs' in push_losses:
-            log_dict['instid_push_n_pairs'] += push_losses['instid_push_n_pairs']
 
         # ── Memory updates ───────────────────────────────────────────────
-        if args.mem_mode == 1:
-            # Mode 1: M_content & pts_flat are already pixel-level
-            AMB3RStage2V4.update_voxel_store(
-                voxel_map, M_content, None, pts_flat, mem_mode=1)
-        elif args.pixel_broadcast_mem:
+        if args.pixel_broadcast_mem:
             _pixel_broadcast_update(
                 voxel_map, M_content, W_conf, gt_pts_chunk,
                 mem_mode=args.mem_mode,
@@ -528,24 +471,19 @@ def train_one_sequence(
 
         # Pixel-wise features & coords for feat_buffer storage
         # (voxelize inside buffer preserves fine-grained info for small objects)
-        pts_pixel      = gt_pts_chunk.reshape(-1, 3)                              # [B*T*H*W, 3] global
-        sem_pixel      = predictions['semantic_feat'].detach()                    # [B,T,C,H,W]
-        ins_pixel      = predictions['instance_feat'].detach()                    # [B,T,C,H,W]
-        sem_pixel      = sem_pixel.permute(0,1,3,4,2).reshape(-1, sem_pixel.shape[2])   # [B*T*H*W, sem_dim]
-        ins_pixel      = ins_pixel.permute(0,1,3,4,2).reshape(-1, ins_pixel.shape[2])   # [B*T*H*W, ins_dim]
-        sem_conf_pixel = predictions['semantic_conf'].detach().permute(0,1,3,4,2).reshape(-1)  # [B*T*H*W]
-        ins_conf_pixel = predictions['instance_conf'].detach().permute(0,1,3,4,2).reshape(-1)  # [B*T*H*W]
-        feat_buffer.update(pts_pixel, sem_pixel, ins_pixel,
-                           sem_conf=sem_conf_pixel, ins_conf=ins_conf_pixel)
+        pts_pixel = gt_pts_chunk.reshape(-1, 3)              # [B*T*H*W, 3] global
+        sem_pixel = predictions['semantic_feat'].detach()     # [B,T,C,H,W]
+        ins_pixel = predictions['instance_feat'].detach()     # [B,T,C,H,W]
+        sem_pixel = sem_pixel.permute(0,1,3,4,2).reshape(-1, sem_pixel.shape[2])  # [B*T*H*W, sem_dim]
+        ins_pixel = ins_pixel.permute(0,1,3,4,2).reshape(-1, ins_pixel.shape[2])  # [B*T*H*W, ins_dim]
+        feat_buffer.update(pts_pixel, sem_pixel, ins_pixel)
 
         # Instance-ID store: pixel-wise instance_mask + features
         inst_mask_raw_full = chunk.get('instance_mask')  # [B, T, H, W]
         if inst_mask_raw_full is not None:
             feat_buffer.update_by_id(
                 inst_mask_raw_full.reshape(-1),  # [B*T*H*W] int64
-                ins_pixel, sem_pixel,
-                ins_conf_flat=ins_conf_pixel,
-                sem_conf_flat=sem_conf_pixel)
+                ins_pixel, sem_pixel)
 
     if valid_chunks == 0:
         voxel_map.clear()
@@ -631,198 +569,6 @@ def train_one_epoch(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# eval_stage1_epoch — one-shot stage-1 baseline eval (no memory, runs once)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@torch.no_grad()
-def eval_stage1_epoch(model, criterion, data_loader, device, args):
-    """
-    Evaluate the stage-1 backbone directly (no memory fusion).
-
-    Runs once before any stage-2 weights are loaded so the result reflects
-    pure stage-1 quality.  Saves PLYs to <output_dir>/eval_stage1/.
-
-    Returns aggregated metric dict.
-    """
-    import trimesh
-    import clip
-    from amb3r.tools.semantic_vis_utils import (
-        build_text_embeddings,
-        export_back_semantic_pca_ply,
-        export_back_semantic_textmatch_ply,
-        save_semantic_color_legend,
-        get_scannet_label_and_color_map
-    )
-    from amb3r.vis_instance_hdbscan import export_instance_hdbscan_ply
-
-    model.eval()
-    model_without_ddp = model.module if hasattr(model, 'module') else model
-    s1 = model_without_ddp.stage1
-
-    metric_logger = misc.MetricLogger(delimiter="  ")
-    metric_logger.meters = defaultdict(lambda: misc.SmoothedValue(window_size=9**9))
-    header = 'Eval Stage-1 Baseline'
-    dtype  = get_dtype(args)
-
-    save_path = os.path.join(args.output_dir, 'eval_stage1')
-    os.makedirs(save_path, exist_ok=True)
-
-    # ── Build text embeddings ─────────────────────────────────────────────
-    labels, _, default_color_table = get_scannet_label_and_color_map("scannet20")
-    color_table = default_color_table[:len(labels)]
-
-    if misc.is_main_process():
-        save_semantic_color_legend(
-            labels=labels, color_table=color_table,
-            save_file=os.path.join(save_path, "scannet20_legend.png"),
-            title="ScanNet20 Semantic Color Legend", ncols=2,
-        )
-
-    text_feat = build_text_embeddings(
-        clip_model=model_without_ddp.stage1.lseg.clip_pretrained,
-        tokenizer=clip.tokenize,
-        labels=labels,
-        device=device,
-        template="a photo of a {}",
-    )
-
-    # ── Evaluation loop ───────────────────────────────────────────────────
-    n_chunks = args.seq_len_eval // args.chunk_size
-
-    for i, batch in enumerate(
-        metric_logger.log_every(data_loader, args.print_freq, header)
-    ):
-        views, views_all = batch
-        for key in views_all:
-            if isinstance(views_all[key], torch.Tensor):
-                views_all[key] = views_all[key].to(device, non_blocking=True)
-
-        normalize_gt(views_all)  # in-place → local frame
-
-        all_preds: list = []
-        total_loss = torch.tensor(0.0, device=device)
-        valid_chunks = 0
-        losses = {}
-
-        for c in range(n_chunks):
-            s = c * args.chunk_size
-            e = s + args.chunk_size
-
-            chunk = {
-                k: (v[:, s:e].contiguous()
-                    if isinstance(v, torch.Tensor) and v.ndim >= 2 else v)
-                for k, v in views_all.items()
-            }
-
-            # ── Stage-1 forward (no memory) ──────────────────────────────
-            with torch.autocast('cuda', dtype=dtype):
-                images, patch_tokens = s1.front_end.encode_patch_tokens(chunk)
-                B, T = images.shape[:2]
-                H, W = images.shape[-2:]
-                lseg_feat = s1._extract_lseg(images)         # (B,T,512,H,W)
-                lseg_flat = lseg_feat.flatten(0, 1)          # (B*T,512,H,W)
-                patch_tokens = s1.clip_patch_fusion(patch_tokens, lseg_flat, H, W)
-                decoded = s1.front_end.decode_patch_tokens(patch_tokens, images)
-                preds = s1.front_end.decode_heads(
-                    images, decoded, has_backend=True, semantic_feats=lseg_feat)
-                preds['_clip_feat_gt'] = lseg_feat
-
-            # Scale-align predicted geometry to normalized GT
-            with torch.autocast('cuda', dtype=dtype, enabled=False):
-                chunk_gt = {
-                    'pts3d':      views_all['pts3d'][:, s:e],
-                    'depthmap':   views_all['depthmap'][:, s:e],
-                    'valid_mask': views_all['valid_mask'][:, s:e],
-                }
-                align_pred_to_gt(preds, chunk_gt)
-
-            # Loss
-            with torch.autocast('cuda', dtype=dtype):
-                losses = criterion(preds, chunk)
-            if torch.isfinite(losses['objective']):
-                total_loss += losses['objective']
-                valid_chunks += 1
-
-            all_preds.append(preds)
-
-        # ── Metrics ──────────────────────────────────────────────────────
-        if valid_chunks > 0:
-            avg_loss = (total_loss / valid_chunks).item()
-            metric_logger.update(loss=avg_loss)
-            for k, v in losses.items():
-                if isinstance(v, torch.Tensor) and k != 'objective':
-                    metric_logger.update(**{k: v.item()})
-
-        # ── PLY export (first N batches, main process only) ──────────────
-        if i < args.eval_ply_n and misc.is_main_process() and all_preds:
-            dataset_name = views.get('dataset', ['seq'])[0] if isinstance(views, dict) else 'seq'
-            if isinstance(dataset_name, (list, tuple)):
-                dataset_name = dataset_name[0]
-
-            wp_list, sem_list, ins_list, color_list, clip_list = [], [], [], [], []
-            for ci, pred in enumerate(all_preds):
-                cs = ci * args.chunk_size
-                ce = cs + args.chunk_size
-                wp = views_all['pts3d'][:, cs:ce].reshape(-1, 3)
-                wp_list.append(wp)
-                sem = pred['semantic_feat'].permute(0,1,3,4,2).reshape(-1, pred['semantic_feat'].shape[2])
-                sem_list.append(sem)
-                ins = pred['instance_feat'].permute(0,1,3,4,2).reshape(-1, pred['instance_feat'].shape[2])
-                ins_list.append(ins)
-                col = pred['images'].permute(0,1,3,4,2).reshape(-1, 3).clamp(0, 1)
-                color_list.append(col)
-                clip_gt = pred['_clip_feat_gt'].permute(0,1,3,4,2).reshape(-1, pred['_clip_feat_gt'].shape[2])
-                clip_list.append(clip_gt)
-
-            pts_all  = torch.cat(wp_list, dim=0)
-            sem_all  = torch.cat(sem_list, dim=0)
-            ins_all  = torch.cat(ins_list, dim=0)
-            col_all  = torch.cat(color_list, dim=0)
-            clip_all = torch.cat(clip_list, dim=0)
-
-            pts_np = pts_all.detach().cpu().numpy()
-            col_np = (col_all.detach().cpu().numpy() * 255).astype(np.uint8)
-            pc = trimesh.points.PointCloud(pts_np, colors=col_np)
-            pc.export(os.path.join(save_path, f'{dataset_name}_geo_{i}.ply'))
-
-            export_back_semantic_pca_ply(
-                points_xyz=pts_all, semantic_feat=sem_all,
-                save_file=os.path.join(save_path, f'{dataset_name}_sem_pca_{i}.ply'),
-            )
-            export_back_semantic_textmatch_ply(
-                points_xyz=pts_all, semantic_feat=sem_all,
-                text_feat=text_feat, color_table=color_table,
-                save_file=os.path.join(save_path, f'{dataset_name}_sem_text_{i}.ply'),
-            )
-            export_back_semantic_textmatch_ply(
-                points_xyz=pts_all, semantic_feat=clip_all,
-                text_feat=text_feat, color_table=color_table,
-                save_file=os.path.join(save_path, f'{dataset_name}_sem_text_gt_{i}.ply'),
-            )
-            export_back_semantic_pca_ply(
-                points_xyz=pts_all, semantic_feat=ins_all,
-                save_file=os.path.join(save_path, f'{dataset_name}_ins_pca_{i}.ply'),
-            )
-            export_instance_hdbscan_ply(
-                points_xyz=pts_all, instance_feat=ins_all,
-                save_file=os.path.join(save_path, f'{dataset_name}_ins_hdbscan_{i}.ply'),
-            )
-
-    # ── Aggregate ─────────────────────────────────────────────────────────
-    metric_logger.synchronize_between_processes()
-    print("Stage-1 eval stats:", metric_logger)
-
-    aggs = [('avg', 'global_avg'), ('med', 'median')]
-    results = {
-        f'{k}_{tag}': getattr(meter, attr)
-        for k, meter in metric_logger.meters.items()
-        for tag, attr in aggs
-    }
-    return results
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # eval_one_epoch — evaluation with PLY visualization export
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -884,8 +630,7 @@ def eval_one_epoch(
     )
 
     # ── Evaluation loop ───────────────────────────────────────────────────
-    # n_chunks = args.seq_len // args.chunk_size
-    n_chunks = args.seq_len_eval // args.chunk_size
+    n_chunks = args.seq_len // args.chunk_size
 
     for i, batch in enumerate(
         metric_logger.log_every(data_loader, args.print_freq, header)
@@ -949,11 +694,7 @@ def eval_one_epoch(
 
             # Update voxel map (detached — no BPTT needed in eval)
             _eval_mem_mode = model_without_ddp.mem_mode if hasattr(model_without_ddp, 'mem_mode') else 0
-            if _eval_mem_mode == 1:
-                AMB3RStage2V4.update_voxel_store(
-                    voxel_map, M_r.detach(), None,
-                    pts_flat.detach(), mem_mode=1)
-            elif args.pixel_broadcast_mem:
+            if args.pixel_broadcast_mem:
                 _pixel_broadcast_update(
                     voxel_map, M_r.detach(),
                     W_c.detach() if W_c is not None else None,
@@ -968,20 +709,15 @@ def eval_one_epoch(
                     mem_mode=_eval_mem_mode)
 
             # Update feat_buffer with pixel-wise features (for debug vis)
-            gt_pts_px   = gt_pts_chunk.reshape(-1, 3)
-            sem_px      = preds['semantic_feat'].detach().permute(0,1,3,4,2)
-            ins_px      = preds['instance_feat'].detach().permute(0,1,3,4,2)
-            sem_px      = sem_px.reshape(-1, sem_px.shape[-1])
-            ins_px      = ins_px.reshape(-1, ins_px.shape[-1])
-            sem_conf_px = preds['semantic_conf'].detach().permute(0,1,3,4,2).reshape(-1)
-            ins_conf_px = preds['instance_conf'].detach().permute(0,1,3,4,2).reshape(-1)
-            feat_buffer.update(gt_pts_px, sem_px, ins_px,
-                               sem_conf=sem_conf_px, ins_conf=ins_conf_px)
+            gt_pts_px = gt_pts_chunk.reshape(-1, 3)
+            sem_px = preds['semantic_feat'].detach().permute(0,1,3,4,2)
+            ins_px = preds['instance_feat'].detach().permute(0,1,3,4,2)
+            sem_px = sem_px.reshape(-1, sem_px.shape[-1])
+            ins_px = ins_px.reshape(-1, ins_px.shape[-1])
+            feat_buffer.update(gt_pts_px, sem_px, ins_px)
             inst_eval = chunk.get('instance_mask')
             if inst_eval is not None:
-                feat_buffer.update_by_id(inst_eval.reshape(-1), ins_px, sem_px,
-                                         ins_conf_flat=ins_conf_px,
-                                         sem_conf_flat=sem_conf_px)
+                feat_buffer.update_by_id(inst_eval.reshape(-1), ins_px, sem_px)
 
         voxel_map.clear()
 
@@ -1142,7 +878,7 @@ def main(args):
     )
     dataset_eval = ScannetppSequence(
         ROOT=args.data_root, split='val',
-        resolution=[res], num_frames=args.seq_len_eval,
+        resolution=[res], num_frames=args.seq_len,
         stride=args.stride, seed=args.seed,
     )
 
@@ -1211,27 +947,6 @@ def main(args):
     model.prepare('bf16' if args.amp == 'bf16' else 'fp32')
     model.to(device)
 
-    # ── Criterion (built early — needed before stage-2 weights are loaded) ────
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    criterion = Stage2V4Loss(
-        w_sem_align=args.w_sem_align,
-        w_ins_contrast=args.w_ins_contrast,
-        w_mem_consist=args.w_mem_consist,
-    ).to(device)
-
-    # ── Stage-1 baseline eval (once, before stage-2 weights overwrite heads) ──
-    # Gate: use a sentinel file so a crashed partial run doesn't block retry
-    _s1_done = output_dir / 'eval_stage1' / 'done'
-    if args.eval_freq > 0 and not _s1_done.exists():
-        print('[Stage2V4] Running stage-1 baseline eval (one-shot)...')
-        stage1_eval_stats = eval_stage1_epoch(
-            model, criterion, loader_eval, device, args)
-        if misc.is_main_process():
-            with open(output_dir / 'eval_stage1.json', 'w') as f:
-                json.dump(stage1_eval_stats, f, indent=2)
-            _s1_done.touch()  # mark as complete
-
     # Optional Stage-2 resume
     start_epoch = 0
     resume_path = args.stage2_ckpt
@@ -1254,8 +969,6 @@ def main(args):
     print(f'[Stage2V4] mem_mode={args.mem_mode}, effective_mem_dim={model.effective_mem_dim}')
     print(f'[Stage2V4] Seq={args.seq_len}, Chunk={args.chunk_size}, '
           f'n_chunks={args.seq_len // args.chunk_size}')
-    print(f'[Stage2V4] Eval Seq={args.seq_len_eval}, Chunk={args.chunk_size}, '
-          f'n_chunks={args.seq_len_eval // args.chunk_size}')
 
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -1295,8 +1008,16 @@ def main(args):
             loss_scaler.load_state_dict(ckpt['scaler'])
         del ckpt
 
+    # ── Criterion ─────────────────────────────────────────────────────────
+    criterion = Stage2V4Loss(
+        w_sem_align=args.w_sem_align,
+        w_ins_contrast=args.w_ins_contrast,
+        w_mem_consist=args.w_mem_consist,
+    ).to(device)
+
     # ── Output dir / logging ──────────────────────────────────────────────
-    # output_dir and criterion already created above (before stage-2 ckpt load)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     log_writer = None
     if misc.is_main_process():

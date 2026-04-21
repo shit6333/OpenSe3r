@@ -34,7 +34,7 @@ class Infinigen_Arrow(BaseManyViewDataset):
         test_id=None,
         full_video=False,
         kf_every=1,
-        cache_scenes=True,
+        cache_scenes=False,
         depth_invalid_threshold_m=1000.0,
         *args,
         ROOT,

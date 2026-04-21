@@ -1,0 +1,32 @@
+#!/bin/bash
+
+CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 train_semantic_stage2v4.py \
+    --stage1_ckpt /mnt/HDD4/ricky/feedforward/amb3r/outputs/exp_stage1_wo_lora_long/checkpoint-last.pth \
+    --data_root /mnt/HDD4/ricky/data/data/InsScene-15K/processed_scannetpp_v2/data_arrow \
+    --output_dir outputs/exp_stage2v4 \
+    --save_freq 1 \
+    --resolution '(518, 336)' \
+    --seq_len 16 \
+    --chunk_size 4 \
+    --stride 2 \
+    --batch_size 1 \
+    --accum_iter 4 \
+    --num_workers 0 \
+    --epochs 30 \
+    --lr 0.00005 \
+    --warmup_epochs 1 \
+    --mem_voxel_size 0.05 \
+    --feat_voxel_size 0.01 \
+    --ema_alpha 0.5 \
+    --mem_dim 128 \
+    --hidden_dim 256 \
+    --num_heads 4 \
+    --w_sem_align 0.5 \
+    --w_ins_contrast 1.0 \
+    --w_mem_consist 0.1 \
+    --use_instid_cross_consistency \
+    --w_instid_cross_sem 0.5 \
+    --w_instid_cross_ins 2.0 \
+    --eval_freq 5 \
+    --eval_ply_n 5 \
+    --amp bf16

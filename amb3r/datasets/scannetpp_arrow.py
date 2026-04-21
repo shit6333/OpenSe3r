@@ -44,7 +44,7 @@ class Scannetpp_Arrow(BaseManyViewDataset):
         test_id=None,
         full_video=False,
         kf_every=1,
-        cache_scenes=True,
+        cache_scenes=False,
         *args,
         ROOT,
         **kwargs,
